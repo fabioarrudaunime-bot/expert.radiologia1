@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Validador de Certificados – EXPERT RADIOLOGIA</title>
+<style>
+  body{font-family:system-ui,Segoe UI,Inter,Roboto,Arial,sans-serif;background:#04123D;color:#fff;margin:0}
+  .wrap{max-width:880px;margin:40px auto;padding:24px}
+  h1{margin-top:0;font-size:28px}
+  .card{background:#0b1c56;padding:20px;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.3)}
+  input[type="text"]{width:100%;padding:12px;border-radius:10px;border:none;font-size:14px}
+  button{padding:10px 18px;border:none;border-radius:10px;background:#39a0ff;color:#04123D;font-weight:600;cursor:pointer}
+  .ok{color:#9bf2ad}.fail{color:#ffd2d2}
+  .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
+  .row{display:flex;gap:14px;align-items:center;margin-top:10px}
+  .mt{margin-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Validador de Certificados – EXPERT RADIOLOGIA</h1>
+  <div class="card">
+    <p>Cole aqui o parâmetro <code>?data=</code> (ou acesse este arquivo com <span class="mono">validator.html?data=...</span>):</p>
+    <input id="data" type="text" placeholder="eyJ2IjoxLCJpZCI6I... (base64url do JSON assinado)" />
+    <div class="row">
+      <button onclick="check()">Validar</button>
+      <button onclick="auto()">Usar ?data da URL</button>
+    </div>
+    <div id="out" class="mt"></div>
+  </div>
+</div>
+
+<!-- TweetNaCl via CDN para Ed25519 -->
+<script src="https://unpkg.com/tweetnacl@1.0.3/nacl-fast.min.js"></script>
+<script>
+/** COLE AQUI SUA CHAVE PÚBLICA (Base64) gerada pelo Python */
+const PUBKEY_B64 = "COLE_AQUI_A_PUBLIC_KEY_BASE64";
+
+/* Utils Base64URL */
+function b64urlToBytes(b64url){
+  const pad = "=".repeat((4 - b64url.length % 4) % 4);
+  const b64 = (b64url + pad).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(b64);
+  const arr = new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
+function bytesToStr(bytes){
+  let s = "";
+  for (let i=0;i<bytes.length;i++) s += String.fromCharCode(bytes[i]);
+  return s;
+}
+
+function decodeDataParam(dataParam){
+  try{
+    const jsonStr = new TextDecoder().decode(b64urlToBytes(dataParam));
+    return JSON.parse(jsonStr);
+  }catch(e){
+    try{ return JSON.parse(dataParam); }catch(_){ return null; }
+  }
+}
+
+function shortCode(sigB64u){
+  // mesmo cálculo do gerador (sha256 da assinatura → base32 10 chars)
+  const sig = b64urlToBytes(sigB64u);
+  // sha256 no browser (Web Crypto)
+  return crypto.subtle.digest("SHA-256", sig).then(buf=>{
+    const bytes = new Uint8Array(buf);
+    // base32 simples
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let bits = 0, value = 0, output = "";
+    for (let i=0;i<bytes.length;i++){
+      value = (value << 8) | bytes[i];
+      bits += 8;
+      while(bits >= 5){
+        output += alphabet[(value >>> (bits - 5)) & 31];
+        bits -= 5;
+      }
+    }
+    return output.replace(/=+$/,"").slice(0,10);
+  });
+}
+
+async function verifyPayload(pack){
+  // pack deve ter {v,id,n,c,d,hrs,s}
+  if(!pack || !pack.s) throw new Error("Pacote inválido (sem assinatura).");
+  const {s, ...payload} = pack;
+  const msg = new TextEncoder().encode(JSON.stringify(payload));
+  const sig = b64urlToBytes(s);
+  const pub = Uint8Array.from(atob(PUBKEY_B64),(c)=>c.charCodeAt(0));
+
+  const ok = nacl.sign.detached.verify(msg, sig, pub);
+  const sc = await shortCode(s);
+  return {ok, payload, signature:s, code:sc};
+}
+
+function renderResult(res){
+  const out = document.getElementById("out");
+  if(!res.ok){
+    out.innerHTML = `<p class="fail"><b>Inválido</b> – assinatura não confere.</p>`;
+    return;
+  }
+  const p = res.payload;
+  out.innerHTML = `
+    <p class="ok"><b>Válido</b> – Assinatura verificada.</p>
+    <p><b>Nome:</b> ${p.n}<br/>
+       <b>Curso:</b> ${p.c}<br/>
+       <b>Carga horária:</b> ${p.hrs} horas<br/>
+       <b>Data de conclusão:</b> ${p.d}<br/>
+       <b>ID:</b> <span class="mono">${p.id}</span><br/>
+       <b>Código de autenticidade:</b> <span class="mono">${res.code}</span>
+    </p>
+  `;
+}
+
+async function check(){
+  const raw = document.getElementById("data").value.trim();
+  const pack = decodeDataParam(raw);
+  if(!pack){ alert("Conteúdo inválido."); return; }
+  try{
+    const res = await verifyPayload(pack);
+    renderResult(res);
+  }catch(e){
+    alert("Erro na verificação: " + e.message);
+  }
+}
+
+function auto(){
+  const url = new URL(window.location.href);
+  const param = url.searchParams.get("data");
+  if(!param){ alert("URL sem ?data="); return; }
+  document.getElementById("data").value = param;
+  check();
+}
+</script>
+</body>
+</html>
