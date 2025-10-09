@@ -11,33 +11,30 @@
   .card{background:#0b1c56;padding:20px;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.3)}
   input[type="text"]{width:100%;padding:12px;border-radius:10px;border:none;font-size:14px}
   button{padding:10px 18px;border:none;border-radius:10px;background:#39a0ff;color:#04123D;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.6;cursor:not-allowed}
   .ok{color:#9bf2ad}.fail{color:#ffd2d2}
   .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
   .row{display:flex;gap:14px;align-items:center;margin-top:10px;flex-wrap:wrap}
   .mt{margin-top:14px}
-  small.hint{display:block;color:#cde6ff8c;margin-top:6px}
-  a.mini{color:#cde6ff8c;text-decoration:underline;cursor:pointer;font-size:12px}
+  small.hint{display:block;opacity:.8;margin-top:8px}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Validador de Certificados – EXPERT RADIOLOGIA</h1>
   <div class="card">
-    <p>Valide o certificado (Cole o código no campo abaixo)</p>
-    <input id="data" type="text" placeholder="Cole aqui a URL inteira, o ?data=... ou o código base64/JSON" />
-    <small class="hint">
-      Dica: a validação exige o <b>pacote completo</b> (o mesmo que está embutido no QR). 
-      O <i>ID</i> ou o <i>código de autenticidade</i> sozinho <b>não</b> bastam.
-    </small>
+    <p><b>Valide o certificado</b> (Cole o código no campo abaixo)</p>
+    <input id="data" type="text" placeholder="https://.../?data=eyJ...  ou  eyJ..." />
     <div class="row">
-      <button onclick="pasteFromClipboard()">Colar código</button>
-      <button onclick="check()">Validar</button>
-      <a class="mini" onclick="auto()">Usar ?data da URL</a>
+      <button id="pasteBtn" onclick="pasteAndValidate()">Colar código</button>
+      <button onclick="validateFromURL()">Validar</button>
     </div>
+    <small class="hint">Dica: você também pode colar manualmente no campo acima e pressionar Enter.</small>
     <div id="out" class="mt"></div>
   </div>
 </div>
 
+<!-- TweetNaCl via CDN para Ed25519 -->
 <script src="https://unpkg.com/tweetnacl@1.0.3/nacl-fast.min.js"></script>
 <script>
 /** COLE AQUI SUA CHAVE PÚBLICA (Base64) gerada pelo Python */
@@ -53,38 +50,17 @@ function b64urlToBytes(b64url){
   return arr;
 }
 
-function tryParseJSON(str){ try{ return JSON.parse(str); }catch(_){ return null; } }
-
 function decodeDataParam(dataParam){
-  // 1) tenta base64url -> JSON
   try{
     const jsonStr = new TextDecoder().decode(b64urlToBytes(dataParam));
-    const obj = tryParseJSON(jsonStr);
-    if(obj) return obj;
-  }catch(_){}
-  // 2) tenta JSON direto
-  const obj = tryParseJSON(dataParam);
-  if(obj) return obj;
-  return null;
-}
-
-function extractDataFromAny(raw){
-  if(!raw) return null;
-  let txt = raw.trim();
-  // URL completa?
-  try{
-    const u = new URL(txt);
-    const p = u.searchParams.get("data");
-    if(p) return p;
-  }catch(_){}
-  // Trecho contendo ?data=...
-  const m = txt.match(/[?&]data=([^&#\s]+)/i);
-  if(m && m[1]) return decodeURIComponent(m[1]);
-  // senão, considera o próprio texto (base64/JSON)
-  return txt;
+    return JSON.parse(jsonStr);
+  }catch(e){
+    try{ return JSON.parse(dataParam); }catch(_){ return null; }
+  }
 }
 
 function shortCode(sigB64u){
+  // mesmo cálculo do gerador (sha256 da assinatura → base32 10 chars)
   const sig = b64urlToBytes(sigB64u);
   return crypto.subtle.digest("SHA-256", sig).then(buf=>{
     const bytes = new Uint8Array(buf);
@@ -103,12 +79,13 @@ function shortCode(sigB64u){
 }
 
 async function verifyPayload(pack){
-  if(!pack) throw new Error("PACOTE_INVALIDO");
-  if(!pack.s) throw new Error("SEM_ASSINATURA");
+  // pack deve ter {v,id,n,c,d,hrs,s}
+  if(!pack || !pack.s) throw new Error("Pacote inválido (sem assinatura).");
   const {s, ...payload} = pack;
   const msg = new TextEncoder().encode(JSON.stringify(payload));
   const sig = b64urlToBytes(s);
   const pub = Uint8Array.from(atob(PUBKEY_B64),(c)=>c.charCodeAt(0));
+
   const ok = nacl.sign.detached.verify(msg, sig, pub);
   const sc = await shortCode(s);
   return {ok, payload, signature:s, code:sc};
@@ -117,7 +94,7 @@ async function verifyPayload(pack){
 function renderResult(res){
   const out = document.getElementById("out");
   if(!res.ok){
-    out.innerHTML = `<p class="fail"><b>Inválido</b> – assinatura não confere (chave pública incorreta ou dados alterados).</p>`;
+    out.innerHTML = `<p class="fail"><b>Inválido</b> – assinatura não confere.</p>`;
     return;
   }
   const p = res.payload;
@@ -133,61 +110,84 @@ function renderResult(res){
   `;
 }
 
-async function check(){
-  const input = document.getElementById("data");
-  const raw = input.value.trim();
-  const maybeData = extractDataFromAny(raw);
-  if(!maybeData){
-    alert("Conteúdo vazio. Cole a URL completa (com ?data=...) ou o código longo.");
-    return;
+/* ====== helpers de entrada ====== */
+function extractDataParam(inputStr){
+  if(!inputStr) return null;
+  inputStr = inputStr.trim();
+
+  // Se for URL com ?data=...
+  try{
+    const u = new URL(inputStr);
+    const d = u.searchParams.get("data");
+    if (d) return d;
+  }catch(_) { /* não era URL, segue */ }
+
+  // Se for um base64url "longo"
+  if (/^[A-Za-z0-9\-\._~]+$/.test(inputStr) && inputStr.length > 50) {
+    return inputStr;
   }
-  const pack = decodeDataParam(maybeData);
+  return null;
+}
+
+async function validateDataParam(dataParam){
+  const pack = decodeDataParam(dataParam);
   if(!pack){
-    alert("Código inválido: isso parece ser apenas o ID ou o código curto. Cole o pacote completo (o conteúdo do QR ou a URL com ?data=...).");
+    alert("Conteúdo inválido. Cole a URL com ?data=... ou o valor completo do data (eyJ...).");
     return;
   }
   try{
     const res = await verifyPayload(pack);
     renderResult(res);
   }catch(e){
-    if(e.message === "SEM_ASSINATURA"){
-      alert("Pacote sem assinatura. Cole o conteúdo completo que vem do QR (deve haver o campo 's').");
-    }else if(e.message === "PACOTE_INVALIDO"){
-      alert("Pacote inválido. Cole a URL completa (com ?data=...) ou o base64/JSON gerado junto ao QR.");
-    }else{
-      alert("Erro na verificação: " + e.message);
-    }
+    alert("Erro na verificação: " + e.message);
   }
 }
 
-function auto(){
+/* ====== botões ====== */
+async function pasteAndValidate(){
+  const btn = document.getElementById("pasteBtn");
+  try{
+    btn.disabled = true;
+    const text = await navigator.clipboard.readText();
+    if(!text){ alert("A área de transferência está vazia."); return; }
+
+    const trimmed = text.trim();
+    document.getElementById("data").value = trimmed;
+
+    const dataParam = extractDataParam(trimmed) || trimmed;
+    await validateDataParam(dataParam);
+  }catch(e){
+    alert("Não consegui acessar a área de transferência. Abra o site em HTTPS (ex.: GitHub Pages) e clique novamente. Erro: " + e.message);
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+function validateFromURL(){
   const url = new URL(window.location.href);
   const param = url.searchParams.get("data");
-  if(!param){ alert("URL sem ?data=. Cole no campo acima e clique em Validar."); return; }
+  if(!param){
+    alert("Esta página foi aberta sem ?data=. Cole o código no campo acima ou use 'Colar código'.");
+    return;
+  }
   document.getElementById("data").value = param;
-  check();
+  validateDataParam(param);
 }
 
-async function pasteFromClipboard(){
-  const input = document.getElementById("data");
-  try{
-    if (navigator.permissions && navigator.permissions.query) {
-      try{ await navigator.permissions.query({name: "clipboard-read"}); }catch(_){}
+/* Enter no campo também valida o que estiver digitado */
+document.addEventListener("DOMContentLoaded", () => {
+  const inp = document.getElementById("data");
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const dataParam = extractDataParam(inp.value) || inp.value.trim();
+      if (!dataParam) {
+        alert("Entrada inválida. Cole a URL com ?data=... ou o valor completo do data (eyJ...).");
+        return;
+      }
+      validateDataParam(dataParam);
     }
-    const text = await navigator.clipboard.readText();
-    if(!text){
-      input.focus();
-      alert("Área de transferência vazia. Tente Ctrl+V (ou ⌘V no Mac) após clicar no campo.");
-      return;
-    }
-    input.value = extractDataFromAny(text);
-    check();
-  }catch(e){
-    input.focus();
-    alert("Não foi possível ler a área de transferência automaticamente.\nUse Ctrl+V (ou ⌘V) para colar no campo e clique em Validar.");
-  }
-}
+  });
+});
 </script>
 </body>
 </html>
-
