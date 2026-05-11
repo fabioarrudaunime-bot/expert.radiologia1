@@ -5,52 +5,179 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Validador de Certificados – EXPERT RADIOLOGIA</title>
 <style>
-  body{font-family:system-ui,Segoe UI,Inter,Roboto,Arial,sans-serif;background:#04123D;color:#fff;margin:0}
-  .wrap{max-width:880px;margin:40px auto;padding:24px}
-  h1{margin-top:0;font-size:28px}
-  .card{background:#0b1c56;padding:20px;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.3)}
-  input[type="text"]{width:100%;padding:12px;border-radius:10px;border:none;font-size:14px}
-  button{padding:10px 18px;border:none;border-radius:10px;background:#39a0ff;color:#04123D;font-weight:600;cursor:pointer}
-  .ok{color:#9bf2ad}.fail{color:#ffd2d2}
-  .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
-  .row{display:flex;gap:14px;align-items:center;margin-top:10px}
-  .mt{margin-top:14px}
+  body{
+    font-family:system-ui,Segoe UI,Inter,Roboto,Arial,sans-serif;
+    background:#04123D;
+    color:#fff;
+    margin:0;
+  }
+  .wrap{
+    max-width:880px;
+    margin:40px auto;
+    padding:24px;
+  }
+  h1{
+    margin-top:0;
+    font-size:28px;
+  }
+  .card{
+    background:#0b1c56;
+    padding:20px;
+    border-radius:14px;
+    box-shadow:0 10px 30px rgba(0,0,0,.3);
+  }
+  input[type="text"]{
+    width:100%;
+    padding:12px;
+    border-radius:10px;
+    border:none;
+    font-size:14px;
+    box-sizing:border-box;
+  }
+  button{
+    padding:10px 18px;
+    border:none;
+    border-radius:10px;
+    background:#39a0ff;
+    color:#04123D;
+    font-weight:600;
+    cursor:pointer;
+  }
+  button:disabled{
+    opacity:.6;
+    cursor:not-allowed;
+  }
+  .ok{color:#9bf2ad}
+  .fail{color:#ffd2d2}
+  .warn{color:#ffe49b}
+  .mono{
+    font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    word-break:break-all;
+  }
+  .row{
+    display:flex;
+    gap:14px;
+    align-items:center;
+    margin-top:10px;
+    flex-wrap:wrap;
+  }
+  .mt{
+    margin-top:14px;
+  }
+  small.hint{
+    display:block;
+    opacity:.8;
+    margin-top:8px;
+  }
+  pre{
+    white-space:pre-wrap;
+    background:#071540;
+    border-radius:10px;
+    padding:12px;
+    overflow:auto;
+  }
 </style>
 </head>
+
 <body>
 <div class="wrap">
   <h1>Validador de Certificados – EXPERT RADIOLOGIA</h1>
+
   <div class="card">
-    <p>Cole aqui o parâmetro <code>?data=</code> (ou acesse este arquivo com <span class="mono">validator.html?data=...</span>):</p>
-    <input id="data" type="text" placeholder="eyJ2IjoxLCJpZCI6I... (base64url do JSON assinado)" />
+    <p><b>Valide o certificado</b></p>
+    <p>Cole o link completo do QR Code, o valor de <code>?data=</code>, ou o JSON assinado.</p>
+
+    <input id="data" type="text" placeholder="https://.../?data=eyJ...  ou  eyJ..." />
+
     <div class="row">
-      <button onclick="check()">Validar</button>
+      <button onclick="check()">Validar código digitado</button>
       <button onclick="auto()">Usar ?data da URL</button>
+      <button id="pasteBtn" onclick="pasteAndValidate()">Colar e validar</button>
     </div>
+
+    <small class="hint">
+      Compatível com certificados antigos e novos. Aceita mais de uma chave pública.
+    </small>
+
     <div id="out" class="mt"></div>
   </div>
 </div>
 
 <!-- TweetNaCl via CDN para Ed25519 -->
 <script src="https://unpkg.com/tweetnacl@1.0.3/nacl-fast.min.js"></script>
-<script>
-/** COLE AQUI SUA CHAVE PÚBLICA (Base64) gerada pelo Python */
-const PUBKEY_B64 = "OGHYq7ywF0EVs2y4qKnUsuWjSFJYBFiP545EkpB389U=";
 
-/* Utils Base64URL */
+<script>
+/*
+  IMPORTANTE:
+  Mantenha aqui TODAS as chaves públicas que já foram usadas.
+  Assim certificados antigos e novos continuam válidos.
+
+  Se algum certificado continuar inválido, provavelmente ele foi gerado
+  com outra chave privada. Nesse caso, adicione aqui a chave pública correta.
+*/
+const PUBKEYS_B64 = [
+  {
+    nome: "Chave do site atual enviado por você",
+    key: "OGHYq7ywF0EVs2y4qKnUsuWjSFJYBFiP545EkpB389U="
+  },
+  {
+    nome: "Chave do autenticador anterior",
+    key: "9P5bnY6DIc4P6WesVhQ4mT+PJOKJ9ccQYRG8NH2Dc2g="
+  }
+];
+
+/* =========================
+   Base64URL
+========================= */
 function b64urlToBytes(b64url){
   const pad = "=".repeat((4 - b64url.length % 4) % 4);
   const b64 = (b64url + pad).replace(/-/g, '+').replace(/_/g, '/');
   const raw = atob(b64);
   const arr = new Uint8Array(raw.length);
-  for(let i=0;i<raw.length;i++) arr[i] = raw.charCodeAt(i);
+
+  for(let i=0;i<raw.length;i++){
+    arr[i] = raw.charCodeAt(i);
+  }
+
   return arr;
 }
 
-function bytesToStr(bytes){
-  let s = "";
-  for (let i=0;i<bytes.length;i++) s += String.fromCharCode(bytes[i]);
-  return s;
+/* =========================
+   Entrada
+========================= */
+function extractDataParam(inputStr){
+  if(!inputStr) return null;
+
+  inputStr = inputStr.trim();
+
+  // Se for URL completa com ?data=...
+  try{
+    const u = new URL(inputStr);
+    const d = u.searchParams.get("data");
+    if(d) return d;
+  }catch(_){}
+
+  // Se colar começando com ?data=
+  if(inputStr.startsWith("?data=")){
+    return inputStr.substring(6);
+  }
+
+  // Se colar começando com data=
+  if(inputStr.startsWith("data=")){
+    return inputStr.substring(5);
+  }
+
+  // Se for JSON puro
+  if(inputStr.startsWith("{") && inputStr.endsWith("}")){
+    return inputStr;
+  }
+
+  // Se for só o base64url
+  if(/^[A-Za-z0-9\-_\.~]+$/.test(inputStr) && inputStr.length > 30){
+    return inputStr;
+  }
+
+  return null;
 }
 
 function decodeDataParam(dataParam){
@@ -58,67 +185,300 @@ function decodeDataParam(dataParam){
     const jsonStr = new TextDecoder().decode(b64urlToBytes(dataParam));
     return JSON.parse(jsonStr);
   }catch(e){
-    try{ return JSON.parse(dataParam); }catch(_){ return null; }
+    try{
+      return JSON.parse(dataParam);
+    }catch(_){
+      return null;
+    }
   }
 }
 
-function shortCode(sigB64u){
-  // mesmo cálculo do gerador (sha256 da assinatura → base32 10 chars)
+/* =========================
+   Código curto
+========================= */
+async function shortCode(sigB64u){
   const sig = b64urlToBytes(sigB64u);
-  // sha256 no browser (Web Crypto)
-  return crypto.subtle.digest("SHA-256", sig).then(buf=>{
-    const bytes = new Uint8Array(buf);
-    // base32 simples
-    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-    let bits = 0, value = 0, output = "";
-    for (let i=0;i<bytes.length;i++){
-      value = (value << 8) | bytes[i];
-      bits += 8;
-      while(bits >= 5){
-        output += alphabet[(value >>> (bits - 5)) & 31];
-        bits -= 5;
-      }
+  const buf = await crypto.subtle.digest("SHA-256", sig);
+  const bytes = new Uint8Array(buf);
+
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = 0;
+  let value = 0;
+  let output = "";
+
+  for(let i=0;i<bytes.length;i++){
+    value = (value << 8) | bytes[i];
+    bits += 8;
+
+    while(bits >= 5){
+      output += alphabet[(value >>> (bits - 5)) & 31];
+      bits -= 5;
     }
-    return output.replace(/=+$/,"").slice(0,10);
+  }
+
+  return output.slice(0,10);
+}
+
+/* =========================
+   JSON compatível com Python antigo
+
+   O Python antigo provavelmente assinou usando:
+   json.dumps(payload, separators=(',', ':'))
+
+   Por padrão, o json.dumps usa ensure_ascii=True.
+   Isso transforma acentos em \u00e1, \u00e9 etc.
+========================= */
+function escapePythonAsciiString(str){
+  let out = '"';
+
+  for(let i=0;i<str.length;i++){
+    const ch = str[i];
+    const code = ch.charCodeAt(0);
+
+    if(ch === '"'){
+      out += '\\"';
+    }else if(ch === "\\"){
+      out += "\\\\";
+    }else if(ch === "\b"){
+      out += "\\b";
+    }else if(ch === "\f"){
+      out += "\\f";
+    }else if(ch === "\n"){
+      out += "\\n";
+    }else if(ch === "\r"){
+      out += "\\r";
+    }else if(ch === "\t"){
+      out += "\\t";
+    }else if(code < 32 || code > 126){
+      out += "\\u" + code.toString(16).padStart(4, "0");
+    }else{
+      out += ch;
+    }
+  }
+
+  out += '"';
+  return out;
+}
+
+function pythonCompactJsonAscii(obj){
+  if(obj === null) return "null";
+
+  if(typeof obj === "string"){
+    return escapePythonAsciiString(obj);
+  }
+
+  if(typeof obj === "number" || typeof obj === "boolean"){
+    return String(obj);
+  }
+
+  if(Array.isArray(obj)){
+    return "[" + obj.map(pythonCompactJsonAscii).join(",") + "]";
+  }
+
+  if(typeof obj === "object"){
+    const keys = Object.keys(obj);
+
+    return "{" + keys.map(k => {
+      return escapePythonAsciiString(k) + ":" + pythonCompactJsonAscii(obj[k]);
+    }).join(",") + "}";
+  }
+
+  return JSON.stringify(obj);
+}
+
+/* =========================
+   Variações de assinatura
+
+   O site tenta verificar mais de um formato para não invalidar certificados antigos.
+========================= */
+function buildPayloadVariants(payload){
+  const variants = [];
+
+  // 1. Formato JavaScript atual
+  variants.push({
+    nome: "JSON.stringify(payload)",
+    texto: JSON.stringify(payload)
+  });
+
+  // 2. Formato Python antigo com ensure_ascii=True
+  variants.push({
+    nome: "Python compact JSON ensure_ascii=True",
+    texto: pythonCompactJsonAscii(payload)
+  });
+
+  // 3. Ordem clássica dos campos
+  const classicOrder = ["v", "id", "n", "c", "d", "hrs"];
+  const classic = {};
+
+  for(const k of classicOrder){
+    if(Object.prototype.hasOwnProperty.call(payload, k)){
+      classic[k] = payload[k];
+    }
+  }
+
+  if(Object.keys(classic).length){
+    variants.push({
+      nome: "Ordem clássica JS",
+      texto: JSON.stringify(classic)
+    });
+
+    variants.push({
+      nome: "Ordem clássica Python ensure_ascii=True",
+      texto: pythonCompactJsonAscii(classic)
+    });
+  }
+
+  // Remove variações duplicadas
+  const seen = new Set();
+
+  return variants.filter(v => {
+    if(seen.has(v.texto)){
+      return false;
+    }
+
+    seen.add(v.texto);
+    return true;
   });
 }
 
+/* =========================
+   Verificação da assinatura
+========================= */
 async function verifyPayload(pack){
-  // pack deve ter {v,id,n,c,d,hrs,s}
-  if(!pack || !pack.s) throw new Error("Pacote inválido (sem assinatura).");
-  const {s, ...payload} = pack;
-  const msg = new TextEncoder().encode(JSON.stringify(payload));
-  const sig = b64urlToBytes(s);
-  const pub = Uint8Array.from(atob(PUBKEY_B64),(c)=>c.charCodeAt(0));
+  if(!pack || !pack.s){
+    throw new Error("Pacote inválido: campo de assinatura 's' não encontrado.");
+  }
 
-  const ok = nacl.sign.detached.verify(msg, sig, pub);
+  const {s, ...payload} = pack;
+  const sig = b64urlToBytes(s);
+  const variants = buildPayloadVariants(payload);
+
+  let diagnostics = [];
+  let ok = false;
+  let usedKey = null;
+  let usedVariant = null;
+
+  for(const pubItem of PUBKEYS_B64){
+    let pub;
+
+    try{
+      pub = Uint8Array.from(atob(pubItem.key), c => c.charCodeAt(0));
+    }catch(e){
+      diagnostics.push("Chave pública inválida no site: " + pubItem.nome);
+      continue;
+    }
+
+    for(const variant of variants){
+      const msg = new TextEncoder().encode(variant.texto);
+      const valid = nacl.sign.detached.verify(msg, sig, pub);
+
+      diagnostics.push(
+        (valid ? "OK: " : "Falhou: ") +
+        pubItem.nome + " / " + variant.nome
+      );
+
+      if(valid){
+        ok = true;
+        usedKey = pubItem.nome;
+        usedVariant = variant.nome;
+        break;
+      }
+    }
+
+    if(ok){
+      break;
+    }
+  }
+
   const sc = await shortCode(s);
-  return {ok, payload, signature:s, code:sc};
+
+  return {
+    ok,
+    payload,
+    signature: s,
+    code: sc,
+    usedKey,
+    usedVariant,
+    diagnostics
+  };
 }
 
+/* =========================
+   Segurança simples para exibir texto
+========================= */
+function safeText(v){
+  if(v === undefined || v === null) return "";
+
+  return String(v)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+/* =========================
+   Resultado na tela
+========================= */
 function renderResult(res){
   const out = document.getElementById("out");
+
   if(!res.ok){
-    out.innerHTML = `<p class="fail"><b>Inválido</b> – assinatura não confere.</p>`;
+    out.innerHTML = `
+      <p class="fail"><b>Inválido</b> – assinatura não confere.</p>
+
+      <p class="warn">
+        Diagnóstico: o certificado foi lido, mas nenhuma chave pública cadastrada
+        conseguiu validar a assinatura. Isso normalmente significa que o certificado
+        foi gerado com outra chave privada.
+      </p>
+
+      <p><b>Dados lidos do certificado:</b></p>
+      <pre>${safeText(JSON.stringify(res.payload, null, 2))}</pre>
+
+      <p><b>Testes feitos:</b></p>
+      <pre>${safeText(res.diagnostics.join("\n"))}</pre>
+    `;
+
     return;
   }
+
   const p = res.payload;
+
   out.innerHTML = `
     <p class="ok"><b>Válido</b> – Assinatura verificada.</p>
-    <p><b>Nome:</b> ${p.n}<br/>
-       <b>Curso:</b> ${p.c}<br/>
-       <b>Carga horária:</b> ${p.hrs} horas<br/>
-       <b>Data de conclusão:</b> ${p.d}<br/>
-       <b>ID:</b> <span class="mono">${p.id}</span><br/>
-       <b>Código de autenticidade:</b> <span class="mono">${res.code}</span>
+
+    <p>
+       <b>Nome:</b> ${safeText(p.n)}<br/>
+       <b>Curso:</b> ${safeText(p.c)}<br/>
+       <b>Carga horária:</b> ${safeText(p.hrs)} horas<br/>
+       <b>Data de conclusão:</b> ${safeText(p.d)}<br/>
+       <b>ID:</b> <span class="mono">${safeText(p.id)}</span><br/>
+       <b>Código de autenticidade:</b> <span class="mono">${safeText(res.code)}</span>
     </p>
+
+    <small class="hint">
+      Validado usando: ${safeText(res.usedKey)} / ${safeText(res.usedVariant)}
+    </small>
   `;
 }
 
-async function check(){
-  const raw = document.getElementById("data").value.trim();
-  const pack = decodeDataParam(raw);
-  if(!pack){ alert("Conteúdo inválido."); return; }
+/* =========================
+   Validação
+========================= */
+async function validateInputValue(value){
+  const dataParam = extractDataParam(value);
+
+  if(!dataParam){
+    alert("Entrada inválida. Cole o link completo do QR Code, o valor de ?data=..., ou o JSON assinado.");
+    return;
+  }
+
+  const pack = decodeDataParam(dataParam);
+
+  if(!pack){
+    alert("Conteúdo inválido. Não foi possível decodificar os dados do certificado.");
+    return;
+  }
+
   try{
     const res = await verifyPayload(pack);
     renderResult(res);
@@ -127,13 +487,68 @@ async function check(){
   }
 }
 
+async function check(){
+  const raw = document.getElementById("data").value.trim();
+  await validateInputValue(raw);
+}
+
 function auto(){
   const url = new URL(window.location.href);
   const param = url.searchParams.get("data");
-  if(!param){ alert("URL sem ?data="); return; }
+
+  if(!param){
+    alert("URL sem ?data=");
+    return;
+  }
+
   document.getElementById("data").value = param;
-  check();
+  validateInputValue(param);
 }
+
+async function pasteAndValidate(){
+  const btn = document.getElementById("pasteBtn");
+
+  try{
+    btn.disabled = true;
+
+    const text = await navigator.clipboard.readText();
+
+    if(!text){
+      alert("A área de transferência está vazia.");
+      return;
+    }
+
+    document.getElementById("data").value = text.trim();
+    await validateInputValue(text.trim());
+
+  }catch(e){
+    alert("Não consegui acessar a área de transferência. Use HTTPS, como GitHub Pages. Erro: " + e.message);
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+/* =========================
+   Inicialização
+========================= */
+document.addEventListener("DOMContentLoaded", () => {
+  const inp = document.getElementById("data");
+
+  inp.addEventListener("keydown", (e) => {
+    if(e.key === "Enter"){
+      check();
+    }
+  });
+
+  // Se abrir o site com ?data=..., valida automaticamente
+  const url = new URL(window.location.href);
+  const param = url.searchParams.get("data");
+
+  if(param){
+    inp.value = param;
+    validateInputValue(param);
+  }
+});
 </script>
 </body>
 </html>
